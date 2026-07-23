@@ -1,4 +1,4 @@
-# Requirement Template - Web & API Applications
+# Requirement Template - Mobile & API Applications
 
 ## Metadata
 - **ID**: REQ-[MODULE]-[###] (e.g., REQ-AUTH-001)
@@ -16,7 +16,7 @@
 - **Design**: Use DESIGN.md to figure out the right design for this feature, if needed.
 
 ## Scope
-- **Applies To**: [Web App | API | Both]
+- **Applies To**: [Mobile App | API | Both]
 - **Components**: [e.g., Authentication Service, Transaction API, Account Portal]
 - **Actors**: [e.g., Authenticated Customer, Service Account, Internal Admin, Third-Party Aggregator]
 - **Data Classification**: [Public | Internal | Confidential | Restricted/PII | Regulated (PCI-DSS, SOX, GLBA)]
