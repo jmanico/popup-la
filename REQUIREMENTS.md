@@ -4,7 +4,7 @@
 
 PopUp-LA is a mobile-first web platform for discovering and publishing temporary events in Los Angeles. Priorities: community safety, accurate listings, privacy-preserving location handling, vetted organizer access, transparent moderation, secure-by-default implementation.
 
-**Out of scope (v1):** native apps, payment processing, ticket resale, public attendee lists, attendee-to-attendee messaging, real-time location tracking, background checks, emergency dispatch, safety guarantees.
+**Out of scope (v1):** native apps, payment processing, ticket resale, public attendee lists, attendee-to-attendee messaging, real-time location tracking, background checks, emergency dispatch, safety guarantees. The v1 client is a mobile-first web application; native-client architecture is a possible future extension and is not an implementation requirement.
 
 ## 2. Roles
 
@@ -154,16 +154,29 @@ PopUp-LA is a mobile-first web platform for discovering and publishing temporary
 - **SEC-008** Rate limits on registration, authentication, password reset, organizer applications, event creation, RSVPs, reports, uploads, notification triggers.
 - **SEC-009** Generic user-facing error messages for security failures; details in protected logs. Production logs exclude passwords, tokens, full private addresses, identity documents, and unnecessary PII.
 - **SEC-010** Automated test suite covering authorization, input handling, and workflow security.
+- **SEC-011** Registration, login, account recovery, email/phone change, OIDC linking, and MFA enrollment/reset shall resist account enumeration and takeover. Recovery shall use single-use, short-lived tokens, invalidate affected sessions after success, notify the account through an independently established channel, and require step-up authentication for security-sensitive changes. Support personnel shall not bypass proof-of-control requirements.
+- **SEC-012** Authentication endpoints shall apply per-account and per-source throttling with progressive delay or equivalent defenses. Controls shall not enable an attacker to permanently lock out a victim; suspicious attempts and recovery changes shall generate security events and risk-based alerts.
+- **SEC-013** OIDC accounts shall be keyed by the validated issuer and subject identifiers, not email alone. Account linking requires an authenticated session plus fresh proof of control of both identities; provider callbacks validate state, nonce, issuer, audience, signature, redirect URI, and authorization-code binding.
+- **SEC-014** Privileged and high-impact actions—including role/trust changes, private-address export or bulk access, identity-proofing decisions, credential/MFA changes, ticket-domain allowlist changes, and destructive policy changes—require recent step-up authentication. Self-approval and self-escalation are prohibited; critical administrator actions require an independently authorized second approver where technically supported, otherwise the action is blocked pending review.
+- **SEC-015** Every externally initiated mutation shall support replay-safe processing through idempotency keys, event/version preconditions, unique constraints, or an equivalent mechanism. Duplicate, reordered, stale, or concurrent requests shall not repeat notifications, consume capacity twice, restore revoked access, or overwrite newer state.
+- **SEC-016** Third-party callbacks and webhooks shall authenticate the sender, verify signatures over the raw request, enforce timestamp/replay windows, validate schema and tenant/context binding, and process idempotently. A callback shall never directly grant a role, release a location, or complete identity proofing without server-side policy evaluation.
+- **SEC-017** Security-relevant secrets and encryption keys shall have documented ownership, least-privilege access, rotation, revocation, versioning, and recovery procedures. Private-location encryption shall use authenticated encryption with record/context binding; plaintext and keys shall never coexist in logs, analytics, caches, or backups beyond the minimum required processing boundary.
+- **SEC-018** Abuse-prone and computationally expensive operations shall have actor, IP/network, object, and system-wide quotas, bounded request/body/decompression sizes, pagination ceilings, timeouts, concurrency limits, and backpressure. The system shall degrade safely under dependency failure without bypassing authorization, privacy, capacity, or moderation holds.
+- **SEC-019** Production shall enforce an explicit cross-origin and browser security policy: allowlisted origins, no credentialed wildcard CORS, anti-clickjacking/frame restrictions, restrictive content security policy, trusted-host validation, and cache controls that prevent authenticated or restricted responses from being stored in shared caches.
+- **SEC-020** Security controls and configuration shall fail closed. Authorization, key management, identity proofing, audit, and policy-service outages shall not cause privileged access, publication, RSVP confirmation, or location release; explicitly documented read-only public functionality may remain available.
 
 ## 21. Audit (AUDIT)
 
 - **AUDIT-001** Audited: organizer approvals/suspensions, publication, material edits, cancellations, visibility changes, private-location access, capacity changes, co-organizer permission changes, moderator and admin actions, fraud determinations, duplicate merges, attendee removals, sensitive exports.
 - **AUDIT-002** Each entry: actor, action, target, timestamp, result, old/new values, reason where required, correlation ID. Logs are tamper-protected, access-restricted, and record references or redacted values where sufficient.
+- **AUDIT-003** A sensitive mutation and its required audit record shall commit atomically or through a durable transactional outbox with detectable reconciliation. If durable audit capture cannot be guaranteed, the mutation fails closed. Audit access, export, retention changes, and deletion attempts are themselves audited; clocks are synchronized and actor identity distinguishes user, service, and impersonation-free support activity.
 
 ## 22. Privacy (PRIV)
 
 - **PRIV-001** Data minimization: collect only what defined functions require. Publish clear notices covering what, why, who, retention, and deletion requests.
 - **PRIV-002** Organizer verification data is never public by default. Precise location data is never sold. Private-event addresses are never used for advertising or profiling. Users control non-essential notifications.
+- **PRIV-003** Data retention, backup retention, legal holds, access requests, correction, and deletion shall be defined by data class. Deletion shall cover replicas, search indexes, caches, derived data, and backups according to a documented schedule; legal holds are authorized, scoped, expiring, and audited. Restores shall reapply deletions and current authorization state before restored data becomes available.
+- **PRIV-004** Bulk exports and administrative searches of identity, attendee, report, verification, or restricted-location data require a stated purpose, least-privilege scope, step-up authentication, audit logging, bounded result size, and non-shareable delivery. Spreadsheet exports neutralize formula injection and omit fields not explicitly authorized.
 
 ## 23. Accessibility (A11Y)
 
@@ -237,6 +250,26 @@ Scenario: AT-012 Non-allowlisted ticket link blocked
   Given an organizer submits an external ticket URL on a non-allowlisted domain
   When the event is submitted for publication
   Then publication is held for moderator approval of the link
+
+Scenario: AT-013 Recovery cannot be used for account takeover
+  Given an account protected by MFA and active sessions
+  When recovery succeeds using a valid single-use token
+  Then the token cannot be replayed, affected sessions are invalidated, the user is notified independently, and the event is audited
+
+Scenario: AT-014 Sensitive mutation fails without durable audit
+  Given the audit sink and transactional outbox cannot durably accept a record
+  When an administrator attempts a role elevation
+  Then the role is unchanged, the request fails closed, and an operational alert is raised
+
+Scenario: AT-015 Signed callback cannot be replayed
+  Given a valid identity-provider callback has already been processed
+  When the same signed callback is submitted again
+  Then no state transition is repeated and the replay is recorded as a security event
+
+Scenario: AT-016 Shared caches cannot disclose a restricted location
+  Given an authorized attendee retrieves a private event address
+  When an unauthorized requester uses the same URL through any shared cache
+  Then the restricted response is not served and no sensitive value is present in cache metadata
 ```
 
 ## 26. Resolved Product Decisions
