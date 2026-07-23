@@ -4,12 +4,10 @@ Provisional, bootstrapped architecture. Sources of truth: [REQUIREMENTS.md](REQU
 (what the system must do) and [DESIGN.md](DESIGN.md) (visual/frontend design language the
 client must support). No implementation exists yet; nothing here is inferred from code.
 
-> ⚠️ Conflict to resolve: the human-provided runtime input below (native mobile apps,
-> React Native) contradicts REQUIREMENTS.md §1, which lists "native apps" as **out of scope
-> for v1** and describes a "mobile-first web platform." This document follows the explicit
-> human input (native apps + REST API) and flags the conflict as `TO BE DECIDED`. The
-> location-privacy, authorization, and honesty requirements are client-agnostic and apply
-> regardless of which client wins.
+The v1 client is the mobile-first web application defined by REQUIREMENTS.md §1. Earlier
+React Native input is retained only as a possible post-v1 option. Security boundaries are
+client-agnostic, but browser-specific session, CSRF, CORS, CSP, and cache controls are
+mandatory for v1.
 
 ## Required Architecture Inputs
 
@@ -26,9 +24,9 @@ Primary use cases:          Browse/search public event listings; RSVP and manage
                             moderation, reporting, and appeals; audited administration.
 Target users / actors:      Visitor, Attendee, Organizer Applicant, Approved Organizer,
                             Co-Organizer, Moderator, Administrator (REQUIREMENTS.md §2).
-Runtime environment:        Mobile app (Android and iOS), plus an API tier.
+Runtime environment:        Mobile-first web client plus an API tier.
 Server framework:           Node.js
-Client framework:           React Native
+Client framework:           TO BE DECIDED (web framework); React Native is out of scope for v1.
 API style / integration:    REST
 Auth / session model:       Passkeys for admins; password + optional MFA for everyone else
                             (MFA REQUIRED for moderators, admins, and Verified organizers per
@@ -41,23 +39,24 @@ Data model expectations:    Derived from REQUIREMENTS.md — core entities below
                             (DATA-LOC-003).
 Deployment model:           Terraform (infrastructure as code).
 Scale expectation:          Los Angeles only (single-region, single-metro).
-Security expectations:      TO BE DECIDED — dedicated security architecture pass is next.
-                            REQUIREMENTS.md §19–22 (AUTHZ, SEC, AUDIT, PRIV) are binding
-                            constraints that pass must satisfy.
+Security expectations:      STRIDE threat model and binding controls are defined below and
+                            in SECURITY.md. Concrete products remain TO BE DECIDED.
 ```
 
 ## Initial Architecture (Provisional)
 
-A three-tier system: React Native clients → REST API (Node.js) → data stores. All
+A three-tier system: web clients → REST API (Node.js) → data stores. All
 authorization, capacity, and location-release decisions are server-side; clients are
 untrusted (EVT-003, AUTHZ-001).
 
-**Clients (React Native, iOS + Android).** Render discovery, event detail, RSVP,
+**Client (mobile-first web).** Renders discovery, event detail, RSVP,
 organizer, and moderation flows. Must express the DESIGN.md language (navy/sunset palette,
 signature gradient, pin-as-hero, mobile-first touch layout) and meet WCAG 2.2 AA
 (A11Y-001): no color-only meaning, accessible names, alt text. Clients hold no
 authoritative state and never receive restricted location data they aren't authorized for
-(LOC-004, SEARCH-002).
+(LOC-004, SEARCH-002). It receives only response-shaped data appropriate to the current
+principal. Restricted responses are private/no-store and never embedded in initial HTML,
+service-worker caches, prefetches, telemetry, or shared caches.
 
 **API tier (Node.js, REST).** Stateless request handlers enforcing deny-by-default
 authorization on every protected request (AUTHZ-001). Responsibilities: authN/session,
@@ -85,6 +84,16 @@ at release time (LOC-006), material-edit/revision handling (EDIT), moderation ac
 - **Notifications** — email (required) + optional push; delivery-attempt recording;
   previews that omit sensitive content (NOTIFY).
 - **Audit** — append-only, tamper-protected, access-restricted event log (AUDIT).
+- **Security Policy Enforcement** — centralized authentication/session validation,
+  step-up checks, authorization policy, request validation, rate/quota enforcement, and
+  security event emission. Application handlers cannot bypass this boundary.
+- **Integration Gateway** — outbound provider calls and inbound webhooks/callbacks for
+  OIDC, identity proofing, email, and push. It verifies source/signature/freshness/context,
+  provides idempotency, constrains egress, and translates vendor state into untrusted input
+  for domain policy evaluation.
+- **Key and Secrets Boundary** — KMS/secrets-manager-backed envelope encryption, key
+  versioning/rotation, separation of duties, and audited decrypt operations. Exact private
+  locations and verification data use separate keys and access policies.
 
 **Cross-cutting constraints (assumptions where a mechanism is unnamed):**
 - Server-authoritative authorization, no IDOR, per-event/per-action co-organizer checks
@@ -93,7 +102,47 @@ at release time (LOC-006), material-edit/revision handling (EDIT), moderation ac
 - Capacity check + RSVP confirmation in one atomic/concurrency-safe transaction (CAP-002).
 - Material changes commit before notifications; notification failure never rolls back a
   valid change (REL-001).
-- Audit writes accompany every sensitive action (AUDIT-001).
+- Audit writes accompany every sensitive action and are durably coupled to the mutation
+  (AUDIT-001..003).
+- Sensitive state changes and audit/outbox records share a transaction boundary; consumers
+  are at-least-once and idempotent. Version checks prevent stale writes and replay.
+- Authorization uses current server state at the moment of use. Cached grants, roles,
+  RSVP state, or moderation decisions never authorize sensitive actions after revocation.
+- Dependency failure is bounded by timeouts, circuit breakers, queues with finite capacity,
+  and backpressure. Security dependencies fail closed; public read paths may degrade to
+  explicitly safe, non-sensitive cached data.
+
+## Trust Boundaries and Data Flows
+
+1. **Internet/browser → edge/API:** untrusted HTTP, cookies, headers, files, URLs, and
+   identifiers cross origin and authentication boundaries. TLS, trusted-host/CORS/CSP,
+   CSRF, body limits, schema validation, authentication, authorization, and quotas apply.
+2. **API → domain/data stores:** only server-derived identity and allowlisted fields cross.
+   Queries are parameterized; row/object authorization and response shaping occur before
+   access. Restricted location data is isolated from discovery/search storage.
+3. **API → asynchronous queue/workers:** messages contain minimal references, integrity
+   metadata, schema versions, correlation/idempotency keys, and authorization-relevant
+   versions. Workers re-check current policy before sensitive effects.
+4. **Platform → third parties:** identity, OIDC, mail, push, map, and ticket providers are
+   independently untrusted. Egress is allowlisted; disclosures are minimized; callbacks
+   are authenticated and replay-resistant; provider assertions never bypass domain rules.
+5. **Operations/moderation → privileged interfaces:** separate roles, phishing-resistant
+   MFA, recent step-up, managed sessions, no shared accounts, purpose binding, and complete
+   audit apply. Production data access is exceptional and time-bounded.
+6. **Data stores → backups/logs/analytics/search:** classification and minimization persist
+   across derived stores. Restricted data is excluded by construction, encrypted where
+   retained, and subject to deletion/legal-hold propagation and restore reconciliation.
+
+## STRIDE Architecture Review
+
+| Category | Principal threats | Required architectural mitigations |
+|---|---|---|
+| Spoofing | Credential stuffing, recovery takeover, OIDC mix-up/linking, forged callbacks, shared staff accounts | Phishing-resistant privileged MFA, secure recovery, issuer+subject identity keys, signed fresh callbacks, unique service/user identities, step-up |
+| Tampering | Mass assignment, stale/concurrent edits, RSVP races, queue replay, policy/config or audit alteration | Allowlisted commands, atomic/versioned writes, idempotency, transactional outbox, signed/versioned configuration, tamper-evident audit |
+| Repudiation | Denied moderation/export/location access, ambiguous service actions, notification disputes | Durable correlated audit, actor/service identity, reason/purpose fields, delivery evidence, synchronized time, audit-of-audit access |
+| Information disclosure | Private addresses in search/cache/HTML/telemetry/backups; reporter or verification data leakage | Physical/logical data separation, response shaping, private/no-store caching, field encryption, metadata stripping, minimization and deletion propagation |
+| Denial of service | Auth/report/upload/search flooding, decompression/parser abuse, notification fan-out, dependency exhaustion | Layered quotas, strict size/time/concurrency bounds, bounded queues, backpressure, circuit breakers, safe degradation |
+| Elevation of privilege | IDOR/BFLA, forged roles, co-organizer scope escape, moderator self-approval, stale authorization | Central deny-by-default policy, per-object/action checks, current-state reauthorization, separation of duties, step-up and dual control |
 
 **Core data entities (derived, not schema-final):** User/Account, OrganizerProfile +
 VerificationRecord, Event + EventRevision, Location (public display + restricted
@@ -108,8 +157,9 @@ AdminConfig (categories/neighborhoods/policy/ticket-allowlist).
   vendor-agnostic per ORG-003).
 - Deployment topology (modular monolith vs. services) — `TO BE DECIDED`; boundaries above
   are logical only.
-- Web vs. native client scope conflict — `TO BE DECIDED` (see top-of-file note).
-- Full security architecture — `TO BE DECIDED` (next pass).
+- Web framework and browser rendering/deployment approach — `TO BE DECIDED`; v1 remains web.
+- Concrete security products/vendors — `TO BE DECIDED`; the controls and trust boundaries
+  in this document are binding regardless of product choice.
 
 ## Requirement Traceability
 
@@ -126,13 +176,13 @@ AdminConfig (categories/neighborhoods/policy/ticket-allowlist).
 | Moderation, Reports & Appeals | MOD-001..005, FRAUD-001..006, REPORT-001, APPEAL-001 |
 | Media service | MEDIA-001/002, LOC-007 |
 | Notifications | NOTIFY-001..003, REL-001 |
-| Audit | AUDIT-001/002 |
+| Audit | AUDIT-001..003 |
 | Cross-cutting authorization | AUTHZ-001..003, EVT-003 |
 | Client UI/UX + design language | DESIGN.md, A11Y-001/002 |
 | Data protection / privacy | PRIV-001/002, DATA-LOC-003/004, SEC-009 |
-| Security architecture | SEC-001..010 — **TO BE DECIDED** (dedicated pass next) |
+| Security architecture | SEC-001..020, AUDIT-001..003, PRIV-001..004; STRIDE review below |
 | Data store / hosting / vendor selection | **TO BE DECIDED** (no vendor in REQUIREMENTS.md) |
-| Native vs. web client scope | REQUIREMENTS.md §1 vs. human input — **TO BE DECIDED** |
+| Web client | REQUIREMENTS.md §1; framework remains **TO BE DECIDED** |
 
 ## Dependency Rules
 
