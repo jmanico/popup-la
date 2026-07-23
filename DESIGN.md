@@ -11,10 +11,7 @@ burst of pink and gold accent shards, evoking a temporary event bursting onto th
 map. Below the mark sits the **PopUp-LA** wordmark: "PopUp-" in deep navy and "LA"
 in the same pink-to-orange sunset gradient.
 
-![PopUp-LA logo](assets/logo.png)
-
-> Add the source logo file at `assets/logo.png` (and any `logo.svg` / favicon
-> exports) so this reference resolves in the repo.
+![PopUp-LA logo](assets/logo.jpg)
 
 ## Concept
 
